@@ -1,0 +1,80 @@
+# JEPA-WAM
+
+[JEPA-WAM](https://arxiv.org/abs/2608.09381) trains a Vision-Language-Action policy with a **joint-embedding world
+modeling** objective. Besides predicting actions, the policy's visual-token states are regressed onto frozen
+[V-JEPA 2.1](https://github.com/facebookresearch/vjepa2) features of the current frame paired with a frame
+`jepa_target_frame_offset` steps in the future. The objective is training-only: inference runs the policy alone.
+
+| Component      | Native backbone (`--policy.backbone.type=qwen`)                                  |
+| -------------- | -------------------------------------------------------------------------------- |
+| Vision encoder | V-JEPA 2.1 ViT-L/16 at 384 px, frozen (576 tokens per camera)                    |
+| Language model | Qwen2.5-0.5B, reading `[<\|im_start\|>][visual tokens][prompt][64 placeholders]` |
+| Action head    | GR00T-style flow-matching DiT conditioned on the 64 placeholder states           |
+| JEPA objective | MLP on the visual-token states, cosine distance to V-JEPA `[t, t + 31]` features |
+| Inference      | Current frame only, 4 Euler steps, chunk of 20                                   |
+
+## Installation
+
+```bash
+pip install -e ".[jepa_wam]"
+```
+
+## Fine-Tuning
+
+The paper's LIBERO recipe trains LoRA adapters (rank 32, alpha 64) on every Qwen linear layer plus the action
+head and JEPA head, with V-JEPA and the projector frozen:
+
+```bash
+lerobot-train \
+  --policy.path=<converted jepa_wam checkpoint> \
+  --dataset.repo_id=<your dataset> \
+  --peft.method_type=LORA --peft.r=32 --peft.lora_alpha=64 \
+  --accelerator.mixed_precision=bf16 \
+  --batch_size=32 --steps=40000
+```
+
+Without `--peft.*`, Qwen is fully fine-tuned. The JEPA target needs the camera frame `jepa_target_frame_offset`
+steps ahead, which `lerobot-train` loads automatically. The offset is counted in dataset frames, so scale it
+with the dataset's fps.
+
+## Configuration Notes
+
+| Field                                     | Default | Meaning                                                                |
+| ----------------------------------------- | ------: | ---------------------------------------------------------------------- |
+| `--policy.backbone.type`                  |  `qwen` | Which instantiation of JEPA-WAM to build                               |
+| `--policy.backbone.chunk_size`            |      20 | Predicted actions per chunk                                            |
+| `--policy.n_action_steps`                 |       8 | Actions executed per chunk                                             |
+| `--policy.num_inference_steps`            |       4 | Euler steps of the flow-matching sampler                               |
+| `--policy.jepa_target_frame_offset`       |      31 | Frames between the observation and the future frame of the JEPA target |
+| `--policy.backbone.jepa_loss_weight`      |     0.5 | Weight of the JEPA cosine loss; `0` trains the action loss alone       |
+| `--policy.backbone.freeze_vision_encoder` |  `true` | Keep V-JEPA frozen (it also produces the JEPA target)                  |
+| `--policy.backbone.freeze_projector`      |  `true` | Keep the vision-to-language projector frozen                           |
+
+State and actions use `QUANTILES` normalization (q01/q99), clamped to `[-1, 1]` as in the original code.
+
+### Differences from the original implementation
+
+- Prompts are left-padded and placed after the visual tokens, with position ids that skip the padding. A padded
+  sample therefore sees exactly its unpadded sequence. The original right-pads and reads the last 64 positions,
+  which mixes padding into the action memory whenever prompts in a batch have different lengths.
+- The original clamps the gripper action into `[0, 1]` and leaves it unnormalized; the converted LIBERO checkpoints
+  express that affine map as quantile statistics, so the policy has no gripper-specific code.
+- The original executes 8 of the 20 predicted actions in its reported evaluations; `n_action_steps` defaults to 8.
+
+## Citation
+
+```bibtex
+@misc{lin2026jepawam,
+  title = {JEPA-WAM: Learning Vision-Language-Action Policies with Joint-Embedding World Modeling},
+  author = {Lin, Yihan and He, Jiawei and Bao, Shifeng and Zhao, Chen and Li, Yang and Wang, Xiaobo and Wang, Yan and Chi, Cheng and Zhang, Jing},
+  journal = {arXiv preprint arXiv:2608.09381},
+  year = {2026},
+  archiveprefix = {arXiv},
+  primaryclass = {cs.RO},
+}
+```
+
+## License
+
+The V-JEPA 2.1 encoder changes are ported from Meta's `facebookresearch/vjepa2` (MIT). The action head is ported
+from JEPA-WAM (MIT), which derives from NVIDIA Isaac GR00T (Apache-2.0). Qwen2.5-0.5B is Apache-2.0.
