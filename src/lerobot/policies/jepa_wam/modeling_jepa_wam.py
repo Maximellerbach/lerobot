@@ -53,8 +53,8 @@ class JEPAWAMPolicy(PreTrainedPolicy):
     def reset(self) -> None:
         self._queues: dict[str, deque[Tensor]] = {ACTION: deque(maxlen=self.config.n_action_steps)}
 
-    def get_optim_params(self) -> dict:
-        return {"params": [p for p in self.parameters() if p.requires_grad]}
+    def get_optim_params(self) -> list[torch.nn.Parameter]:
+        return [p for p in self.parameters() if p.requires_grad]
 
     def forward(self, batch: dict[str, Tensor], reduction: str = "mean") -> tuple[Tensor, dict]:
         loss, logs = self.model.compute_loss(batch, reduction=reduction)

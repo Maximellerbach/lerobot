@@ -128,7 +128,7 @@ def test_training_reduces_both_losses(tokenizer_path):
     policy = JEPAWAMPolicy(config).train()
     preprocessor, _ = make_jepa_wam_pre_post_processors(config, STATS)
     batch = preprocessor(make_batch())
-    optimizer = torch.optim.AdamW(policy.get_optim_params()["params"], lr=1e-3)
+    optimizer = torch.optim.AdamW(policy.get_optim_params(), lr=1e-3)
 
     history = []
     for _ in range(60):
